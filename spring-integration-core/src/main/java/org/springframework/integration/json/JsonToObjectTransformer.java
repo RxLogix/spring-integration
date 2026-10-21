@@ -18,6 +18,8 @@ package org.springframework.integration.json;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import org.springframework.beans.factory.BeanClassLoaderAware;
 import org.springframework.core.ResolvableType;
@@ -26,6 +28,7 @@ import org.springframework.expression.Expression;
 import org.springframework.integration.expression.ExpressionUtils;
 import org.springframework.integration.expression.FunctionExpression;
 import org.springframework.integration.mapping.support.JsonHeaders;
+import org.springframework.integration.support.json.JacksonJsonUtils;
 import org.springframework.integration.support.json.JsonObjectMapper;
 import org.springframework.integration.support.json.JsonObjectMapperProvider;
 import org.springframework.integration.transformer.AbstractTransformer;
@@ -50,6 +53,7 @@ import org.springframework.util.Assert;
  *
  * @author Mark Fisher
  * @author Artem Bilan
+ * @author Uwez Khan
  *
  * @since 2.0
  *
@@ -63,11 +67,15 @@ public class JsonToObjectTransformer extends AbstractTransformer implements Bean
 
 	private final JsonObjectMapper<?, ?> jsonObjectMapper;
 
+	private final Set<String> trustedPackages = new LinkedHashSet<>(JacksonJsonUtils.DEFAULT_TRUSTED_PACKAGES);
+
 	private ClassLoader classLoader;
 
 	private Expression valueTypeExpression =
 			new FunctionExpression<Message<?>>((message) ->
 					obtainResolvableTypeFromHeadersIfAny(message.getHeaders(), this.classLoader));
+
+	private boolean usingDefaultValueTypeExpression = true;
 
 	private EvaluationContext evaluationContext;
 
@@ -144,6 +152,33 @@ public class JsonToObjectTransformer extends AbstractTransformer implements Bean
 	 */
 	public void setValueTypeExpression(Expression valueTypeExpression) {
 		this.valueTypeExpression = valueTypeExpression;
+		this.usingDefaultValueTypeExpression = false;
+	}
+
+	/**
+	 * Specify the packages to trust when a target type is resolved from the request
+	 * message {@link JsonHeaders} type id headers. By default, only the Spring messaging
+	 * and integration packages (plus {@code java.lang} and {@code java.util}) are trusted
+	 * (see {@link JacksonJsonUtils#DEFAULT_TRUSTED_PACKAGES}), so a type resolved from
+	 * an untrusted package is rejected to prevent deserialization of arbitrary, potentially
+	 * dangerous classes supplied by an untrusted source. Add your own application packages
+	 * here to allow them, or use {@code "*"} to trust all packages (not recommended when the
+	 * type id headers may come from an untrusted source). This restriction does not apply to
+	 * a type configured explicitly via the constructor or {@link #setValueTypeExpression}.
+	 * @param trustedPackages the trusted Java packages for deserialization.
+	 * @since 5.5.22
+	 * @see org.springframework.integration.selector.AllowListMessageHeaderSelector
+	 */
+	public void setTrustedPackages(String... trustedPackages) {
+		for (String trustedPackage : trustedPackages) {
+			if ("*".equals(trustedPackage)) {
+				this.trustedPackages.clear();
+				break;
+			}
+			else {
+				this.trustedPackages.add(trustedPackage);
+			}
+		}
 	}
 
 	@Override
@@ -163,6 +198,11 @@ public class JsonToObjectTransformer extends AbstractTransformer implements Bean
 
 		boolean removeHeaders = false;
 		if (valueType != null) {
+			if (this.usingDefaultValueTypeExpression) {
+				// The target type was resolved from the (potentially untrusted) JsonHeaders
+				// type id headers, so it must be restricted to the trusted packages.
+				assertTrustedPackages(valueType);
+			}
 			removeHeaders = true;
 		}
 		else {
@@ -204,6 +244,37 @@ public class JsonToObjectTransformer extends AbstractTransformer implements Bean
 				throw ex;
 			}
 		}
+	}
+
+	private void assertTrustedPackages(ResolvableType valueType) {
+		Class<?> rawClass = valueType.getRawClass();
+		if (rawClass != null) {
+			Package typePackage = rawClass.getPackage();
+			String packageName = (typePackage != null) ? typePackage.getName() : "";
+			if (!isTrustedPackage(packageName)) {
+				throw new IllegalArgumentException("The class '" + rawClass.getName() +
+						"' is not in the trusted packages: " + this.trustedPackages + ". " +
+						"If you believe this class is safe to deserialize, add its package via " +
+						"'setTrustedPackages()', or use '*' to trust all packages " +
+						"(not recommended when the type id headers may come from an untrusted source).");
+			}
+		}
+		for (ResolvableType generic : valueType.getGenerics()) {
+			assertTrustedPackages(generic);
+		}
+	}
+
+	private boolean isTrustedPackage(String packageName) {
+		if (this.trustedPackages.isEmpty()) {
+			return true;
+		}
+		for (String trustedPackage : this.trustedPackages) {
+			if (packageName.equals(trustedPackage) ||
+					(!packageName.equals("java.util.logging") && packageName.startsWith(trustedPackage + "."))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	@Nullable

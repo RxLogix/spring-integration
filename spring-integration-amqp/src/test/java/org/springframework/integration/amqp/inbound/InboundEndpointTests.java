@@ -160,7 +160,9 @@ public class InboundEndpointTests {
 
 		Message<?> receive = channel.receive(1000);
 
-		Message<?> result = new JsonToObjectTransformer().transform(receive);
+		JsonToObjectTransformer transformer = new JsonToObjectTransformer();
+		transformer.setTrustedPackages("*");
+		Message<?> result = transformer.transform(receive);
 
 		assertThat(result.getPayload()).isEqualTo(payload);
 		org.springframework.amqp.core.Message sourceData = StaticMessageHeaderAccessor.getSourceData(result);

@@ -36,9 +36,12 @@ import org.springframework.integration.support.json.EmbeddedJsonHeadersMessageMa
 import org.springframework.integration.test.util.TestUtils;
 import org.springframework.integration.zeromq.ZeroMqProxy;
 import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.support.GenericMessage;
+import org.springframework.messaging.support.MessageBuilder;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.InstanceOfAssertFactories.MAP;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -115,6 +118,7 @@ public class ZeroMqChannelTests {
 		ZeroMqChannel channel = new ZeroMqChannel(CONTEXT, true);
 		channel.setBeanName("testChannel2");
 		channel.setConsumeDelay(Duration.ofMillis(10));
+		channel.setMessageMapper(new EmbeddedJsonHeadersMessageMapper("*"));
 		channel.afterPropertiesSet();
 
 		BlockingQueue<Message<?>> received = new LinkedBlockingQueue<>();
@@ -129,6 +133,29 @@ public class ZeroMqChannelTests {
 		assertThat(message).isNotNull().isEqualTo(testMessage);
 		message = received.poll(10, TimeUnit.SECONDS);
 		assertThat(message).isNotNull().isEqualTo(testMessage);
+
+		channel.destroy();
+	}
+
+	@Test
+	void testPubSubLocalDefaultMessageMapper() throws InterruptedException {
+		ZeroMqChannel channel = new ZeroMqChannel(CONTEXT, true);
+		channel.setBeanName("testChannel2");
+		channel.setConsumeDelay(Duration.ofMillis(10));
+		channel.afterPropertiesSet();
+
+		BlockingQueue<Message<?>> received = new LinkedBlockingQueue<>();
+
+		channel.subscribe(received::offer);
+
+		Message<String> testMessage = MessageBuilder.withPayload("test1").setHeader("test", "value").build();
+		assertThat(channel.send(testMessage)).isTrue();
+
+		Message<?> message = received.poll(10, TimeUnit.SECONDS);
+		assertThat(message)
+				.returns(testMessage.getPayload(), Message::getPayload)
+				.extracting(Message::getHeaders, MAP)
+				.containsOnlyKeys(MessageHeaders.ID, MessageHeaders.TIMESTAMP);
 
 		channel.destroy();
 	}
@@ -151,6 +178,7 @@ public class ZeroMqChannelTests {
 		channel.setConnectUrl("tcp://localhost:" + proxy.getFrontendPort() + ':' + proxy.getBackendPort());
 		channel.setBeanName("testChannel3");
 		channel.setConsumeDelay(Duration.ofMillis(10));
+		channel.setMessageMapper(new EmbeddedJsonHeadersMessageMapper("*"));
 		channel.afterPropertiesSet();
 
 		BlockingQueue<Message<?>> received = new LinkedBlockingQueue<>();
@@ -188,6 +216,7 @@ public class ZeroMqChannelTests {
 		channel.setZeroMqProxy(proxy);
 		channel.setBeanName("testChannel4");
 		channel.setConsumeDelay(Duration.ofMillis(10));
+		channel.setMessageMapper(new EmbeddedJsonHeadersMessageMapper("*"));
 		channel.afterPropertiesSet();
 
 		BlockingQueue<Message<?>> received = new LinkedBlockingQueue<>();
@@ -250,6 +279,7 @@ public class ZeroMqChannelTests {
 		proxy.start();
 
 		ZeroMqChannel channel = new ZeroMqChannel(CONTEXT, true);
+		channel.setMessageMapper(new EmbeddedJsonHeadersMessageMapper("*"));
 		channel.setZeroMqProxy(proxy);
 		channel.setBeanName("testChannelWithCurve");
 		channel.setSendSocketConfigurer(socket -> {
